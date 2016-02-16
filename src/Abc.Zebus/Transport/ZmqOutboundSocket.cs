@@ -70,7 +70,7 @@ namespace Abc.Zebus.Transport
             _isConnected = false;
         }
 
-        public void Send(MemoryStream buffer, TransportMessage message)
+        public void Send(byte[] buffer, int length, TransportMessage message)
         {
             if (_isInClosedState)
             {
@@ -82,7 +82,7 @@ namespace Abc.Zebus.Transport
                 SwitchToOpenState();
             }
 
-            if (_socket.SendWithTimeout(buffer.GetBuffer(), (int)buffer.Position, _options.SendTimeout) >= 0)
+            if (_socket.SendWithTimeout(buffer, length, _options.SendTimeout) >= 0)
             {
                 _failedSendCount = 0;
                 return;

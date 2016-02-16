@@ -1,4 +1,6 @@
-﻿using Abc.Zebus.Util.Annotations;
+﻿using System.IO;
+using Abc.Zebus.Util;
+using Abc.Zebus.Util.Annotations;
 using ProtoBuf;
 
 namespace Abc.Zebus.Transport
@@ -13,7 +15,22 @@ namespace Abc.Zebus.Transport
         public readonly MessageTypeId MessageTypeId;
 
         [ProtoMember(3, IsRequired = true)]
-        public readonly byte[] MessageBytes;
+        private byte[] ContentBytes
+        {
+            get
+            {
+                if (Content == null)
+                    return ArrayUtil.Empty<byte>();
+
+                var buffer = new byte[Content.Length];
+                Content.Read(buffer, 0, buffer.Length);
+                return buffer;
+            }
+            set { Content = new MemoryStream(value); }
+        }
+
+        [ProtoIgnore]
+        public Stream Content { get; private set; }
 
         [ProtoMember(4, IsRequired = true)]
         public readonly OriginatorInfo Originator;
@@ -24,21 +41,21 @@ namespace Abc.Zebus.Transport
         [ProtoMember(6, IsRequired = false)]
         public bool? WasPersisted { get; set; }
 
-        public TransportMessage(MessageTypeId messageTypeId, byte[] messageBytes, Peer sender)
-            : this(messageTypeId, messageBytes, sender.Id, sender.EndPoint, MessageId.NextId())
+        public TransportMessage(MessageTypeId messageTypeId, Stream content, Peer sender)
+            : this(messageTypeId, content, sender.Id, sender.EndPoint, MessageId.NextId())
         {
         }
 
-        public TransportMessage(MessageTypeId messageTypeId, byte[] messageBytes, PeerId senderId, string senderEndPoint, MessageId messageId)
-            : this (messageTypeId, messageBytes, CreateOriginator(senderId, senderEndPoint), messageId)
+        public TransportMessage(MessageTypeId messageTypeId, Stream content, PeerId senderId, string senderEndPoint, MessageId messageId)
+            : this (messageTypeId, content, CreateOriginator(senderId, senderEndPoint), messageId)
         {
         }
 
-        public TransportMessage(MessageTypeId messageTypeId, byte[] messageBytes, OriginatorInfo originator, MessageId messageId)
+        public TransportMessage(MessageTypeId messageTypeId, Stream content, OriginatorInfo originator, MessageId messageId)
         {
             Id = messageId;
             MessageTypeId = messageTypeId;
-            MessageBytes = messageBytes;
+            Content = content;
             Originator = originator;
         }
 
@@ -54,7 +71,7 @@ namespace Abc.Zebus.Transport
 
         internal static TransportMessage Infrastructure(MessageTypeId messageTypeId, PeerId peerId, string senderEndPoint)
         {
-            return new TransportMessage(messageTypeId, new byte[0], peerId, senderEndPoint, MessageId.NextId());
+            return new TransportMessage(messageTypeId, new MemoryStream(), peerId, senderEndPoint, MessageId.NextId());
         }
     }
 }

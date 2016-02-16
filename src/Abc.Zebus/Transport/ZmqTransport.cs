@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using Abc.Zebus.Directory;
+using Abc.Zebus.Serialization.Protobuf;
 using Abc.Zebus.Util;
 using Abc.Zebus.Util.Extensions;
 using log4net;
@@ -309,19 +310,19 @@ namespace Abc.Zebus.Transport
             Thread.CurrentThread.Name = "ZmqTransport.OutboundProc";
             _logger.DebugFormat("Starting outbound proc...");
 
-            var outputBuffer = new MemoryStream();
+            var outputStream = new CodedOutputStream();
 
             foreach (var socketAction in _outboundSocketActions.GetConsumingEnumerable())
             {
-                RunOutboundSocketAction(socketAction, outputBuffer);
+                RunOutboundSocketAction(socketAction, outputStream);
             }
 
-            GracefullyDisconnectOutboundSockets(outputBuffer);
+            GracefullyDisconnectOutboundSockets(outputStream);
 
             _logger.InfoFormat("OutboundProc terminated");
         }
 
-        private void RunOutboundSocketAction(OutboundSocketAction socketAction, MemoryStream outputBuffer)
+        private void RunOutboundSocketAction(OutboundSocketAction socketAction, CodedOutputStream outputStream)
         {
             if (socketAction.IsDisconnect)
             {
@@ -329,8 +330,8 @@ namespace Abc.Zebus.Transport
             }
             else
             {
-                SerializeAndSendTransportMessage(outputBuffer, socketAction.Message, socketAction.GetPersistentPeer().ToList(), true);
-                SerializeAndSendTransportMessage(outputBuffer, socketAction.Message, socketAction.GetTransientPeers().ToList(), false);
+                SerializeAndSendTransportMessage(outputStream, socketAction.Message, socketAction.GetPersistentPeer().ToList(), true);
+                SerializeAndSendTransportMessage(outputStream, socketAction.Message, socketAction.GetTransientPeers().ToList(), false);
             }
         }
 
@@ -353,19 +354,19 @@ namespace Abc.Zebus.Transport
             }
         }
 
-        private void SerializeAndSendTransportMessage(MemoryStream outputBuffer, TransportMessage transportMessage, List<Peer> peers, bool wasPersisted)
+        private void SerializeAndSendTransportMessage(CodedOutputStream outputStream, TransportMessage transportMessage, List<Peer> peers, bool wasPersisted)
         {
             if (!peers.Any())
                 return;
 
-            Serialize(outputBuffer, transportMessage, wasPersisted);
+            Serialize(outputStream, transportMessage, wasPersisted);
 
             foreach (var peer in peers)
             {
                 try
                 {
                     var outboundSocket = GetConnectedOutboundSocket(peer);
-                    outboundSocket.Send(outputBuffer, transportMessage);
+                    outboundSocket.Send(outputStream.Buffer, outputStream.Position, transportMessage);
                 }
                 catch (Exception ex)
                 {
@@ -392,11 +393,11 @@ namespace Abc.Zebus.Transport
             return outboundSocket;
         }
 
-        private void GracefullyDisconnectOutboundSockets(MemoryStream outputBuffer)
+        private void GracefullyDisconnectOutboundSockets(CodedOutputStream outputStream)
         {
             _outboundSocketsToStop = new CountdownEvent(_outboundSockets.Count);
 
-            SendEndOfStreamMessages(outputBuffer);
+            SendEndOfStreamMessages(outputStream);
 
             _logger.InfoFormat("Waiting for {0} outbound socket end of stream acks", _outboundSocketsToStop.InitialCount);
             if (!_outboundSocketsToStop.Wait(_configuration.WaitForEndOfStreamAckTimeout))
@@ -405,15 +406,15 @@ namespace Abc.Zebus.Transport
             DisconnectPeers(_outboundSockets.Keys.ToList());
         }
 
-        private void SendEndOfStreamMessages(MemoryStream outputBuffer)
+        private void SendEndOfStreamMessages(CodedOutputStream outputStream)
         {
             foreach (var outboundSocket in _outboundSockets.Values)
             {
                 _logger.InfoFormat("Sending EndOfStream to {0}", outboundSocket.EndPoint);
 
                 var endOfStreamMessage = TransportMessage.Infrastructure(MessageTypeId.EndOfStream, PeerId, InboundEndPoint);
-                Serialize(outputBuffer, endOfStreamMessage, false);
-                outboundSocket.Send(outputBuffer, endOfStreamMessage);
+                Serialize(outputStream, endOfStreamMessage, false);
+                outboundSocket.Send(outputStream.Buffer, outputStream.Position, endOfStreamMessage);
             }
         }
 
@@ -435,13 +436,14 @@ namespace Abc.Zebus.Transport
             }
         }
 
-        private void Serialize(MemoryStream outputBuffer, TransportMessage transportMessage, bool wasPersisted)
+        private void Serialize(CodedOutputStream outputStream, TransportMessage transportMessage, bool wasPersisted)
         {
-            outputBuffer.Position = 0;
+            outputStream.Position = 0;
 
             transportMessage.Environment = _environment;
             transportMessage.WasPersisted = wasPersisted;
-            Serializer.Serialize(outputBuffer, transportMessage);
+
+            TransportMessageWriter.Write(outputStream, transportMessage);
         }
 
         private void SafeAdd<T>(BlockingCollection<T> collection, T item)
